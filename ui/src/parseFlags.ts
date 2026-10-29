@@ -3,12 +3,14 @@ const goTmplActionPrefix = "/[[";
 
 // paseses flags (string values) assigned under the window objects by server.
 export default function parseFlagsUnderWindow() {
+  window.AUTH_ENABLED = window.FLAG_AUTH_ENABLED === "true";
+
   // ROOT_PATH
   if (window.FLAG_ROOT_PATH === undefined) {
     console.log("ROOT_PATH is not defined. Falling back to emtpy string");
     window.ROOT_PATH = "";
   } else {
-    window.ROOT_PATH = window.FLAG_ROOT_PATH;
+    window.ROOT_PATH = window.FLAG_ROOT_PATH.replace(/\/$/, "");
   }
 
   // PROMETHEUS_SERVER_ADDRESS

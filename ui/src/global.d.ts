@@ -4,6 +4,8 @@ interface Window {
   FLAG_ROOT_PATH: string;
   FLAG_PROMETHEUS_SERVER_ADDRESS: string;
   FLAG_READ_ONLY: string;
+  FLAG_AUTH_ENABLED: string;
+  AUTH_ENABLED: boolean;
 
   // Root URL path for asynqmon app.
   // ROOT_PATH should not have the tailing slash.

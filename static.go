@@ -21,6 +21,7 @@ type uiAssetsHandler struct {
 	indexFileName  string
 	prometheusAddr string
 	readOnly       bool
+	authEnabled    bool
 }
 
 // ServeHTTP inspects the URL path to locate a file within the static dir
@@ -64,10 +65,12 @@ func (h *uiAssetsHandler) renderIndexFile(w http.ResponseWriter) error {
 		RootPath       string
 		PrometheusAddr string
 		ReadOnly       bool
+		AuthEnabled    bool
 	}{
 		RootPath:       h.rootPath,
 		PrometheusAddr: h.prometheusAddr,
 		ReadOnly:       h.readOnly,
+		AuthEnabled:    h.authEnabled,
 	}
 	return tmpl.Execute(w, data)
 }

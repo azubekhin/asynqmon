@@ -17,7 +17,6 @@ import (
 	"github.com/hibiken/asynqmon"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/rs/cors"
 )
 
 // Config holds configurations for the program provided via the command line.
@@ -42,6 +41,11 @@ type Config struct {
 	// Prometheus related configs
 	EnableMetricsExporter bool
 	PrometheusServerAddr  string
+
+	// Authentication is required by the standalone application.
+	AuthUsername     string
+	AuthPassword     string
+	AuthCookieSecure bool
 
 	// Args are the positional (non-flag) command line arguments
 	Args []string
@@ -73,9 +77,23 @@ func parseFlags(progname string, args []string) (cfg *Config, output string, err
 	flags.StringVar(&conf.PrometheusServerAddr, "prometheus-addr", getEnvDefaultString("PROMETHEUS_ADDR", ""), "address of prometheus server to query time series")
 	flags.BoolVar(&conf.ReadOnly, "read-only", getEnvOrDefaultBool("READ_ONLY", false), "restrict to read-only mode")
 
+	flags.StringVar(&conf.AuthUsername, "auth-user", getEnvDefaultString("BASIC_AUTH_USER", ""), "username for the login screen (required)")
+	flags.StringVar(&conf.AuthPassword, "auth-password", "", "password for the login screen (required; prefer BASIC_AUTH_PASSWORD)")
+	flags.BoolVar(&conf.AuthCookieSecure, "auth-cookie-secure", getEnvOrDefaultBool("AUTH_COOKIE_SECURE", true), "send session cookies only over HTTPS")
+
 	err = flags.Parse(args)
 	if err != nil {
 		return nil, buf.String(), err
+	}
+	// Keep the password out of flag defaults: help and parse errors print them.
+	passwordFlagSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "auth-password" {
+			passwordFlagSet = true
+		}
+	})
+	if !passwordFlagSet {
+		conf.AuthPassword = os.Getenv("BASIC_AUTH_PASSWORD")
 	}
 	conf.Args = flags.Args()
 	return &conf, buf.String(), nil
@@ -142,6 +160,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if cfg.AuthUsername == "" || cfg.AuthPassword == "" {
+		log.Fatal("BASIC_AUTH_USER and BASIC_AUTH_PASSWORD (or --auth-user and --auth-password) are required")
+	}
+
 	redisConnOpt, err := makeRedisConnOpt(cfg)
 	if err != nil {
 		log.Fatal(err)
@@ -153,14 +175,12 @@ func main() {
 		ResultFormatter:   asynqmon.ResultFormatterFunc(resultFormatterFunc(cfg)),
 		PrometheusAddress: cfg.PrometheusServerAddr,
 		ReadOnly:          cfg.ReadOnly,
+		Auth:              &asynqmon.AuthOptions{Username: cfg.AuthUsername, Password: cfg.AuthPassword, InsecureCookies: !cfg.AuthCookieSecure},
 	})
 	defer h.Close()
 
-	c := cors.New(cors.Options{
-		AllowedMethods: []string{"GET", "POST", "DELETE"},
-	})
 	mux := http.NewServeMux()
-	mux.Handle("/", c.Handler(h))
+	mux.Handle("/", h)
 	if cfg.EnableMetricsExporter {
 		// Using NewPedanticRegistry here to test the implementation of Collectors and Metrics.
 		reg := prometheus.NewPedanticRegistry()
@@ -173,7 +193,7 @@ func main() {
 			prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}),
 			prometheus.NewGoCollector(),
 		)
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		mux.Handle("/metrics", h.RequireAuth(promhttp.HandlerFor(reg, promhttp.HandlerOpts{})))
 	}
 
 	srv := &http.Server{
