@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"os"
 	"strings"
 	"testing"
 
@@ -33,6 +34,7 @@ func TestParseFlags(t *testing.T) {
 				EnableMetricsExporter: false,
 				PrometheusServerAddr:  "",
 				ReadOnly:              false,
+				AuthCookieSecure:      true,
 
 				Args: []string{},
 			},
@@ -106,7 +108,7 @@ func TestMakeRedisConnOpt(t *testing.T) {
 				MasterName: "mymaster",
 				SentinelAddrs: []string{
 					"localhost:5000", "localhost:5001", "localhost:5002"},
-				Password: "secretpassword", // FIXME: Shouldn't this be SentinelPassword instead?
+				SentinelPassword: "secretpassword",
 			},
 		},
 		{
@@ -133,5 +135,36 @@ func TestMakeRedisConnOpt(t *testing.T) {
 					tc.want, got, diff)
 			}
 		})
+	}
+}
+
+func TestAuthFlags(t *testing.T) {
+	setEnv := func(key, value string) {
+		previous, exists := os.LookupEnv(key)
+		if err := os.Setenv(key, value); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if exists {
+				_ = os.Setenv(key, previous)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		})
+	}
+	setEnv("BASIC_AUTH_USER", "operator")
+	setEnv("BASIC_AUTH_PASSWORD", "test-password")
+	setEnv("AUTH_COOKIE_SECURE", "false")
+	cfg, _, err := parseFlags("asynqmon", nil)
+	_, help, _ := parseFlags("asynqmon", []string{"--help"})
+	if strings.Contains(help, "test-password") {
+		t.Fatal("help exposes password from environment")
+	}
+	if err != nil || cfg.AuthUsername != "operator" || cfg.AuthPassword != "test-password" || cfg.AuthCookieSecure {
+		t.Fatal("auth env not parsed")
+	}
+	cfg, _, err = parseFlags("asynqmon", []string{"--auth-user=admin", "--auth-password=override", "--auth-cookie-secure=true"})
+	if err != nil || cfg.AuthUsername != "admin" || cfg.AuthPassword != "override" || !cfg.AuthCookieSecure {
+		t.Fatal("flags must override env")
 	}
 }

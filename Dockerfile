@@ -1,60 +1,25 @@
-#
-# First stage: 
-# Building a frontend.
-#
-
-FROM alpine:3.17 AS frontend
-
-# Move to a working directory (/static).
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS frontend
 WORKDIR /static
-
-# https://stackoverflow.com/questions/69692842/error-message-error0308010cdigital-envelope-routinesunsupported
+# Required by the existing webpack/minifier dependencies on OpenSSL 3.
 ENV NODE_OPTIONS=--openssl-legacy-provider
-# Install npm (with latest nodejs) and yarn (globally, in silent mode).
-RUN apk add --update nodejs npm && \
-    npm i -g -s --unsafe-perm yarn
-
-# Copy only ./ui folder to the working directory.
+RUN npm install --global yarn@1.22.22 --force
 COPY ui .
+# Dependency caches are temporary; only the compiled UI is needed in later stages.
+RUN --mount=type=tmpfs,target=/static/node_modules --mount=type=tmpfs,target=/usr/local/share/.cache/yarn \
+    yarn install --frozen-lockfile --non-interactive && yarn build
 
-# Run yarn scripts (install & build).
-RUN yarn install && yarn build
-
-#
-# Second stage: 
-# Building a backend.
-#
-
-FROM golang:1.18-alpine AS backend
-
-# Move to a working directory (/build).
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS backend
 WORKDIR /build
-
-# Copy and download dependencies.
 COPY go.mod go.sum ./
 RUN go mod download
-
-# Copy a source code to the container.
 COPY . .
-
-# Copy frontend static files from /static to the root folder of the backend container.
-COPY --from=frontend ["/static/build", "ui/build"]
-
-# Set necessary environmet variables needed for the image and build the server.
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-
-# Run go build (with ldflags to reduce binary size).
-RUN go build -ldflags="-s -w" -o asynqmon ./cmd/asynqmon
-
-#
-# Third stage: 
-# Creating and running a new scratch container with the backend binary.
-#
+COPY --from=frontend /static/build ui/build
+ARG TARGETOS
+ARG TARGETARCH
+RUN --mount=type=tmpfs,target=/tmp --mount=type=tmpfs,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o asynqmon ./cmd/asynqmon
 
 FROM scratch
-
-# Copy binary from /build to the root folder of the scratch container.
-COPY --from=backend ["/build/asynqmon", "/"]
-
-# Command to run when starting the container.
+COPY --from=backend /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=backend /build/asynqmon /
 ENTRYPOINT ["/asynqmon"]

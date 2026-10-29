@@ -19,5 +19,6 @@ docker:
 	docker build -t asynqmon .
 	docker run --rm \
 		--name asynqmon \
+		-e BASIC_AUTH_USER -e BASIC_AUTH_PASSWORD -e AUTH_COOKIE_SECURE \
 		-p 8080:8080 \
 		asynqmon --redis-addr=host.docker.internal:6379

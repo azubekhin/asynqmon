@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -40,18 +41,37 @@ type Options struct {
 	// to get the time series data about queue metrics and show them in the web UI.
 	PrometheusAddress string
 
+	// Auth enables cookie authentication when configured. Nil preserves unauthenticated library usage.
+	Auth *AuthOptions
+
 	// Set ReadOnly to true to restrict user to view-only mode.
 	ReadOnly bool
 }
 
 // HTTPHandler is a http.Handler for asynqmon application.
 type HTTPHandler struct {
+	auth     *authManager
 	router   *mux.Router
 	closers  []func() error
 	rootPath string // the value should not have the trailing slash
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.auth != nil {
+		requestPath := path.Clean(r.URL.Path)
+		if requestPath != h.rootPath && !strings.HasPrefix(requestPath, h.rootPath+"/") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.HasPrefix(requestPath, h.rootPath+"/api/auth/") {
+			h.auth.serveAuth(w, r, requestPath)
+			return
+		}
+		if requestPath == h.rootPath+"/api" || strings.HasPrefix(requestPath, h.rootPath+"/api/") {
+			h.RequireAuth(h.router).ServeHTTP(w, r)
+			return
+		}
+	}
 	h.router.ServeHTTP(w, r)
 }
 
@@ -59,6 +79,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func New(opts Options) *HTTPHandler {
 	if opts.RedisConnOpt == nil {
 		panic("asynqmon.New: RedisConnOpt field is required")
+	}
+	if opts.Auth != nil && (opts.Auth.Username == "" || opts.Auth.Password == "") {
+		panic("asynqmon.New: Auth.Username and Auth.Password are required")
 	}
 	rc, ok := opts.RedisConnOpt.MakeRedisClient().(redis.UniversalClient)
 	if !ok {
@@ -73,7 +96,12 @@ func New(opts Options) *HTTPHandler {
 	// Remove tailing slash from RootPath.
 	opts.RootPath = strings.TrimSuffix(opts.RootPath, "/")
 
+	var auth *authManager
+	if opts.Auth != nil {
+		auth = newAuthManager(*opts.Auth, opts.RootPath)
+	}
 	return &HTTPHandler{
+		auth:     auth,
 		router:   muxRouter(opts, rc, i),
 		closers:  []func() error{rc.Close, i.Close},
 		rootPath: opts.RootPath,
@@ -220,6 +248,7 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 		indexFileName:  "index.html",
 		prometheusAddr: opts.PrometheusAddress,
 		readOnly:       opts.ReadOnly,
+		authEnabled:    opts.Auth != nil,
 	}
 
 	return router

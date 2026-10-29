@@ -9,6 +9,96 @@ It supports integration with [Prometheus](https://prometheus.io) to display time
 
 Asynqmon is both a library that you can include in your web application, as well as a binary that you can simply install and run.
 
+## Authentication in this fork
+
+The standalone binary and Docker image require `BASIC_AUTH_USER` and
+`BASIC_AUTH_PASSWORD`. There is no default account or password.
+
+```sh
+export BASIC_AUTH_USER=admin
+# Set BASIC_AUTH_PASSWORD through your secret manager or a private env file.
+export AUTH_COOKIE_SECURE=false # HTTP only; leave true behind HTTPS
+./asynqmon --redis-addr=127.0.0.1:6379
+```
+
+Open the panel, sign in, and use **Sign out** to invalidate your session.
+Sessions expire after 12 hours and are lost on restart. This first version uses
+one shared account and one process; it does not support load-balanced replicas.
+The server protects all operational `/api/*` endpoints and the optional `/metrics`
+exporter. A Prometheus scraper must obtain a session cookie via login and renew
+it after expiry; the exporter no longer supports anonymous scraping.
+
+| Flag | Environment | Default |
+| --- | --- | --- |
+| `--auth-user` | `BASIC_AUTH_USER` | required |
+| `--auth-password` | `BASIC_AUTH_PASSWORD` | required |
+| `--auth-cookie-secure` | `AUTH_COOKIE_SECURE` | `true` |
+
+Prefer the environment over password flags, which may be visible in process
+listings. Keep `AUTH_COOKIE_SECURE=true` with HTTPS, including behind a proxy.
+Setting it to false permits HTTP: passwords and cookies then travel unencrypted.
+The login form does not replace TLS or make the server private at the network level.
+
+### Library integration
+
+The Go module path is retained for compatibility. To consume this fork, pin it
+in your application's `go.mod` before using `Options.Auth`:
+
+```sh
+go mod edit "-replace=github.com/hibiken/asynqmon=github.com/azubekhin/asynqmon@$ASYNQMON_COMMIT"
+go mod tidy
+```
+
+Existing library users remain unauthenticated unless they configure `Options.Auth`:
+
+```go
+h := asynqmon.New(asynqmon.Options{
+    RootPath: "/monitoring",
+    RedisConnOpt: asynq.RedisClientOpt{Addr: ":6379"},
+    Auth: &asynqmon.AuthOptions{
+        Username: os.Getenv("BASIC_AUTH_USER"),
+        Password: os.Getenv("BASIC_AUTH_PASSWORD"),
+        // InsecureCookies: true, // only when deliberately using HTTP
+    },
+})
+```
+
+Mount additional handlers under `h.RequireAuth(handler)` to reuse the same sessions.
+They must live under `RootPath` for the browser to send its scoped cookie.
+Authentication endpoints remain available when `ReadOnly` is enabled.
+
+### Authentication API
+
+All endpoints are relative to `RootPath`. Responses are JSON with `Cache-Control: no-store`.
+
+- `GET /api/auth/session` returns `{ "authenticated": true|false }`.
+- `POST /api/auth/login` accepts `{ "username": "...", "password": "..." }` and
+  returns `{ "authenticated": true }` with an HttpOnly session cookie.
+- `POST /api/auth/logout` revokes the current session, expires the cookie, and
+  returns `{ "authenticated": false }`. It is idempotent.
+
+Login requires `Content-Type: application/json`. Every state-changing request,
+including login and logout, requires `X-Asynqmon-Request: 1`. Cross-origin CORS
+access is not enabled. The development UI proxies relative API requests to
+`localhost:8080`; start the backend with `AUTH_COOKIE_SECURE=false` for local HTTP.
+Invalid credentials return `401` with the same message for either field. At most
+10 login requests are accepted in any minute across all clients; extra requests
+return `429` and `Retry-After: 60`. Unauthenticated operational requests return
+`401`; missing request headers return `403` after authentication.
+
+### Build and publish this fork
+
+Use Node 22, Yarn 1.22.22 and Go 1.26 for the tested build. Run `make build`,
+`go test -race ./...`, and `cd ui && yarn test --watchAll=false --runInBand`.
+The committed `ui/build` must be rebuilt whenever the frontend changes.
+
+PRs build and test without publishing. After merge to `master`, GitHub Actions
+publishes `${DOCKER_REGISTRY}/asynqmon:sha-<full commit SHA>` for amd64 and arm64.
+Configure repository variable `DOCKER_REGISTRY` (default
+`registry.wearemadstudio.com:5000`) and secrets `DOCKER_USERNAME`, `DOCKER_PASSWORD`.
+Use a user with permission to push this image. No workflow publishes to hibiken's
+Docker Hub namespace. Deploy the exact successful commit tag, not `latest`.
+
 ## Version Compatibility
 
 Please make sure the version compatibility with the Asynq package you are using.
@@ -33,18 +123,16 @@ There're a few options to install the binary:
 
 ### Release binaries
 
-You can download the release binary for your system from the [releases page](https://github.com/hibiken/asynqmon/releases).
+You can download the release binary for your system from the [releases page](https://github.com/azubekhin/asynqmon/releases).
 
 ### Docker image
 
 To pull the Docker image:
 
 ```bash
-# Pull the latest image
-docker pull hibiken/asynqmon
-
-# Or specify the image by tag
-docker pull hibiken/asynqmon[:tag]
+# Use the full SHA from a successful image publication.
+export ASYNQMON_IMAGE="registry.wearemadstudio.com:5000/asynqmon:sha-$ASYNQMON_COMMIT"
+docker pull "$ASYNQMON_IMAGE"
 ```
 
 ### Building from source
@@ -69,7 +157,7 @@ make docker
 
 ## Run the binary
 
-To use the defaults, simply run and open http://localhost:8080.
+Set the required authentication environment variables above, then open http://localhost:8080.
 
 ```bash
 # with a binary
@@ -77,9 +165,10 @@ To use the defaults, simply run and open http://localhost:8080.
 
 # with a docker image
 docker run --rm \
+    -e BASIC_AUTH_USER -e BASIC_AUTH_PASSWORD -e AUTH_COOKIE_SECURE \
     --name asynqmon \
     -p 8080:8080 \
-    hibiken/asynqmon
+    "$ASYNQMON_IMAGE"
 ```
 
 By default, Asynqmon web server listens on port `8080` and connects to a Redis server running on `127.0.0.1:6379`.
@@ -91,7 +180,7 @@ To see all available flags, run:
 ./asynqmon --help
 
 # with a docker image
-docker run hibiken/asynqmon --help
+docker run "$ASYNQMON_IMAGE" --help
 ```
 
 Here's the available flags:
@@ -163,16 +252,18 @@ The address can be specified via `--prometheus-addr`. This enables the metrics v
 
 # with Docker (connect to a Redis server running on the host machine)
 docker run --rm \
+    -e BASIC_AUTH_USER -e BASIC_AUTH_PASSWORD -e AUTH_COOKIE_SECURE \
     --name asynqmon \
     -p 3000:3000 \
-    hibiken/asynqmon --port=3000 --redis-addr=host.docker.internal:6380
+    "$ASYNQMON_IMAGE" --port=3000 --redis-addr=host.docker.internal:6380
 
 # with Docker (connect to a Redis server running in the Docker container)
 docker run --rm \
+    -e BASIC_AUTH_USER -e BASIC_AUTH_PASSWORD -e AUTH_COOKIE_SECURE \
     --name asynqmon \
     --network dev-network \
     -p 8080:8080 \
-    hibiken/asynqmon --redis-addr=dev-redis:6379
+    "$ASYNQMON_IMAGE" --redis-addr=dev-redis:6379
 ```
 
 Next, go to [localhost:8080](http://localhost:8080) and see Asynqmon dashboard:

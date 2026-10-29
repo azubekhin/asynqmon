@@ -1,4 +1,5 @@
 import React from "react";
+import AuthBoundary from "./components/AuthBoundary";
 import { connect, ConnectedProps } from "react-redux";
 import clsx from "clsx";
 import { BrowserRouter as Router, Switch, Route } from "react-router-dom";
@@ -157,6 +158,7 @@ function App(props: ConnectedProps<typeof connector>) {
   const paths = getPaths();
   return (
     <ThemeProvider theme={theme}>
+      <AuthBoundary>
       <Router>
         <div className={classes.root}>
           <AppBar
@@ -307,6 +309,7 @@ function App(props: ConnectedProps<typeof connector>) {
           </div>
         </div>
       </Router>
+      </AuthBoundary>
     </ThemeProvider>
   );
 }
