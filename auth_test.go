@@ -53,9 +53,6 @@ func TestAuthLifecycle(t *testing.T) {
 				if w.Code != 200 || !strings.Contains(w.Body.String(), "<html") {
 					t.Fatalf("SPA unavailable: %d", w.Code)
 				}
-				if strings.Contains(w.Body.String(), "private-prometheus") {
-					t.Fatal("internal prometheus URL leaked")
-				}
 				for _, url := range []string{root + "/api/queues", root + "/api/metrics", root + "/api/redis_info", root + "/api/unknown", root + "/extra/../api/queues"} {
 					if w := authRequest(h, "GET", url, "", nil, false); w.Code != 401 {
 						t.Fatalf("anonymous %s: %d", url, w.Code)

@@ -1,47 +1,29 @@
-import axios, { AxiosRequestConfig } from "axios";
-
-interface SessionRequestConfig extends AxiosRequestConfig {
-  sessionGeneration?: number;
-}
+import axios from "axios";
 
 export const SESSION_ENDED = "asynqmon:session-ended";
-let generation = 0;
+let pending = axios.CancelToken.source();
 
-// Invalidate responses already in flight when a user logs out or a session expires.
+export const apiClient = axios.create({
+  headers: { "X-Asynqmon-Request": "1" },
+  cancelToken: pending.token,
+});
+
+// Cancel the old session's requests before allowing requests for a new session.
 export function invalidateRequests() {
-  generation += 1;
+  pending.cancel("Session ended");
+  pending = axios.CancelToken.source();
+  apiClient.defaults.cancelToken = pending.token;
 }
 
-export const apiClient = axios.create();
-apiClient.interceptors.request.use((config) => {
-  config.headers = { ...config.headers, "X-Asynqmon-Request": "1" };
-  (config as SessionRequestConfig).sessionGeneration = generation;
-  return config;
-});
-apiClient.interceptors.response.use(
-  (response) => {
-    if (
-      (response.config as SessionRequestConfig).sessionGeneration !== generation
-    ) {
-      return Promise.reject(new axios.Cancel("Session ended"));
-    }
-    return response;
-  },
-  (error) => {
-    if (
-      (error.config as SessionRequestConfig)?.sessionGeneration !== generation
-    ) {
-      return Promise.reject(new axios.Cancel("Session ended"));
-    }
-    if (error.response?.status === 401 && window.AUTH_ENABLED) {
-      invalidateRequests();
-      window.dispatchEvent(new Event(SESSION_ENDED));
-    }
-    return Promise.reject(error);
+apiClient.interceptors.response.use(undefined, (error) => {
+  if (error.response?.status === 401 && window.AUTH_ENABLED) {
+    invalidateRequests();
+    window.dispatchEvent(new Event(SESSION_ENDED));
   }
-);
+  return Promise.reject(error);
+});
 
-// Login errors belong to the form, not the global expired-session handler.
+// Login errors belong to the form, not the expired-session handler.
 export const authClient = axios.create({
   headers: { "X-Asynqmon-Request": "1" },
 });

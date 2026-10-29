@@ -68,15 +68,10 @@ func (h *uiAssetsHandler) renderIndexFile(w http.ResponseWriter) error {
 		AuthEnabled    bool
 	}{
 		RootPath:       h.rootPath,
-		PrometheusAddr: "",
-		AuthEnabled:    h.authEnabled,
+		PrometheusAddr: h.prometheusAddr,
 		ReadOnly:       h.readOnly,
+		AuthEnabled:    h.authEnabled,
 	}
-	// The frontend only needs to know whether metrics are enabled, never the internal URL.
-	if h.prometheusAddr != "" {
-		data.PrometheusAddr = "enabled"
-	}
-	w.Header().Set("Cache-Control", "no-store")
 	return tmpl.Execute(w, data)
 }
 

@@ -20,12 +20,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: '1.26.x'
+          go-version: 1.16
 
       - name: Set up Node
         uses: actions/setup-node@v2
         with:
-          node-version: "22"
+          node-version: "12"
 
       - name: Get release
         id: release
@@ -34,7 +34,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Install NPM packages
-        run: npm install --global yarn@1.22.22 && cd ui && yarn install --frozen-lockfile --non-interactive
+        run: cd ui && rm yarn.lock && yarn install
 
       - name: Build Release Binary
         run: |

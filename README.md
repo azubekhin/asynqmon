@@ -11,93 +11,39 @@ Asynqmon is both a library that you can include in your web application, as well
 
 ## Authentication in this fork
 
-The standalone binary and Docker image require `BASIC_AUTH_USER` and
-`BASIC_AUTH_PASSWORD`. There is no default account or password.
+The standalone server requires `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD`.
+It shows a login form; sessions expire after 12 hours, on sign-out, or on restart.
+Operational `/api/*` endpoints and the optional `/metrics` exporter require a session.
+The account and sessions are local to one server process; no user database is needed.
 
-```sh
-export BASIC_AUTH_USER=admin
-# Set BASIC_AUTH_PASSWORD through your secret manager or a private env file.
-export AUTH_COOKIE_SECURE=false # HTTP only; leave true behind HTTPS
-./asynqmon --redis-addr=127.0.0.1:6379
-```
-
-Open the panel, sign in, and use **Sign out** to invalidate your session.
-Sessions expire after 12 hours and are lost on restart. This first version uses
-one shared account and one process; it does not support load-balanced replicas.
-The server protects all operational `/api/*` endpoints and the optional `/metrics`
-exporter. A Prometheus scraper must obtain a session cookie via login and renew
-it after expiry; the exporter no longer supports anonymous scraping.
-
-| Flag | Environment | Default |
+| Environment | Flag | Default |
 | --- | --- | --- |
-| `--auth-user` | `BASIC_AUTH_USER` | required |
-| `--auth-password` | `BASIC_AUTH_PASSWORD` | required |
-| `--auth-cookie-secure` | `AUTH_COOKIE_SECURE` | `true` |
+| `BASIC_AUTH_USER` | `--auth-user` | required |
+| `BASIC_AUTH_PASSWORD` | `--auth-password` | required |
+| `AUTH_COOKIE_SECURE` | `--auth-cookie-secure` | `true` |
 
-Prefer the environment over password flags, which may be visible in process
-listings. Keep `AUTH_COOKIE_SECURE=true` with HTTPS, including behind a proxy.
-Setting it to false permits HTTP: passwords and cookies then travel unencrypted.
-The login form does not replace TLS or make the server private at the network level.
+Prefer environment variables over password flags. Copy `.env.example` to a private
+file and set a password. With HTTPS keep `AUTH_COOKIE_SECURE=true`; setting it to
+false permits HTTP, which transmits credentials and cookies without encryption.
+For Docker, pass these variables with `--env-file .env` or `-e`.
 
-### Library integration
+Library users opt in with `Options.Auth = &asynqmon.AuthOptions{Username: user,
+Password: password}`; `InsecureCookies: true` permits HTTP. Nil keeps the existing
+unauthenticated library behavior. Use a Go module replacement pointing to this
+fork when importing it under the retained `github.com/hibiken/asynqmon` module path.
+`RootPath` and `ReadOnly` are supported. Additional handlers can reuse sessions
+via `h.RequireAuth(handler)` under the same root path.
 
-The Go module path is retained for compatibility. To consume this fork, pin it
-in your application's `go.mod` before using `Options.Auth`:
+`GET /api/auth/session` returns `{ "authenticated": true|false }`.
+`POST /api/auth/login` accepts JSON `{ "username": "...", "password": "..." }`;
+`POST /api/auth/logout` revokes the cookie. All writes require
+`X-Asynqmon-Request: 1`; cross-origin CORS access is disabled. Wrong credentials
+return `401`; the shared limit of 10 login requests/minute returns `429`.
 
-```sh
-go mod edit "-replace=github.com/hibiken/asynqmon=github.com/azubekhin/asynqmon@$ASYNQMON_COMMIT"
-go mod tidy
-```
-
-Existing library users remain unauthenticated unless they configure `Options.Auth`:
-
-```go
-h := asynqmon.New(asynqmon.Options{
-    RootPath: "/monitoring",
-    RedisConnOpt: asynq.RedisClientOpt{Addr: ":6379"},
-    Auth: &asynqmon.AuthOptions{
-        Username: os.Getenv("BASIC_AUTH_USER"),
-        Password: os.Getenv("BASIC_AUTH_PASSWORD"),
-        // InsecureCookies: true, // only when deliberately using HTTP
-    },
-})
-```
-
-Mount additional handlers under `h.RequireAuth(handler)` to reuse the same sessions.
-They must live under `RootPath` for the browser to send its scoped cookie.
-Authentication endpoints remain available when `ReadOnly` is enabled.
-
-### Authentication API
-
-All endpoints are relative to `RootPath`. Responses are JSON with `Cache-Control: no-store`.
-
-- `GET /api/auth/session` returns `{ "authenticated": true|false }`.
-- `POST /api/auth/login` accepts `{ "username": "...", "password": "..." }` and
-  returns `{ "authenticated": true }` with an HttpOnly session cookie.
-- `POST /api/auth/logout` revokes the current session, expires the cookie, and
-  returns `{ "authenticated": false }`. It is idempotent.
-
-Login requires `Content-Type: application/json`. Every state-changing request,
-including login and logout, requires `X-Asynqmon-Request: 1`. Cross-origin CORS
-access is not enabled. The development UI proxies relative API requests to
-`localhost:8080`; start the backend with `AUTH_COOKIE_SECURE=false` for local HTTP.
-Invalid credentials return `401` with the same message for either field. At most
-10 login requests are accepted in any minute across all clients; extra requests
-return `429` and `Retry-After: 60`. Unauthenticated operational requests return
-`401`; missing request headers return `403` after authentication.
-
-### Build and publish this fork
-
-Use Node 22, Yarn 1.22.22 and Go 1.26 for the tested build. Run `make build`,
-`go test -race ./...`, and `cd ui && yarn test --watchAll=false --runInBand`.
-The committed `ui/build` must be rebuilt whenever the frontend changes.
-
-PRs build and test without publishing. After merge to `master`, GitHub Actions
-publishes `${DOCKER_REGISTRY}/asynqmon:sha-<full commit SHA>` for amd64 and arm64.
-Configure repository variable `DOCKER_REGISTRY` (default
+The fork workflow builds PRs and publishes `${DOCKER_REGISTRY}/asynqmon:sha-<commit>`
+after a push to master. Configure variable `DOCKER_REGISTRY` (default
 `registry.wearemadstudio.com:5000`) and secrets `DOCKER_USERNAME`, `DOCKER_PASSWORD`.
-Use a user with permission to push this image. No workflow publishes to hibiken's
-Docker Hub namespace. Deploy the exact successful commit tag, not `latest`.
+Set `ASYNQMON_IMAGE` to the exact published image before using the Docker examples.
 
 ## Version Compatibility
 
@@ -130,8 +76,7 @@ You can download the release binary for your system from the [releases page](htt
 To pull the Docker image:
 
 ```bash
-# Use the full SHA from a successful image publication.
-export ASYNQMON_IMAGE="registry.wearemadstudio.com:5000/asynqmon:sha-$ASYNQMON_COMMIT"
+# Set ASYNQMON_IMAGE to this fork's published sha-<commit> tag.
 docker pull "$ASYNQMON_IMAGE"
 ```
 
@@ -157,7 +102,7 @@ make docker
 
 ## Run the binary
 
-Set the required authentication environment variables above, then open http://localhost:8080.
+Set the authentication variables above, then open http://localhost:8080.
 
 ```bash
 # with a binary
